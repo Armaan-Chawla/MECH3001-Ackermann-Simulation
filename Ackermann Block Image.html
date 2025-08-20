@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F1 Steering Geometry Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* Dark background */
+            color: #e2e8f0;
+        }
+        .container {
+            max-width: 1024px;
+        }
+        canvas {
+            border: 2px solid #2d3748;
+            background-color: #2d3748;
+            touch-action: none;
+            width: 100%;
+            height: auto;
+        }
+        .wheel {
+            fill: #4a5568;
+            stroke: #e2e8f0;
+            stroke-width: 2px;
+        }
+        .car-body {
+            fill: #e53e3e;
+            stroke: #e2e8f0;
+            stroke-width: 2px;
+        }
+        .linkage {
+            stroke: #4299e1;
+            stroke-width: 3px;
+        }
+        .control-panel {
+            background-color: #2d3748;
+        }
+        .label-text {
+            color: #cbd5e0;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" id="MathJax-script" async></script>
+</head>
+<body class="p-6 md:p-10 flex flex-col items-center justify-center min-h-screen">
+    <div class="container bg-gray-800 shadow-2xl rounded-3xl p-6 md:p-10 space-y-8">
+        <h1 class="text-3xl md:text-5xl font-bold text-center text-red-500 tracking-wider">F1 Steering Geometry</h1>
+        <p class="text-gray-400 text-center text-lg md:text-xl">
+            Explore the kinematic differences between Perfect Ackermann, Anti-Ackermann, and Parallel steering.
+            Adjust the steering angle to see how the inner and outer wheels turn.
+        </p>
+
+        <div class="flex flex-col md:flex-row gap-8">
+            <!-- Visualization Canvas -->
+            <div class="w-full md:w-3/4 flex-grow flex items-center justify-center bg-gray-900 rounded-2xl shadow-inner p-4 md:p-6">
+                <svg id="carSvg" viewBox="0 0 800 500" class="w-full h-auto">
+                    <!-- Car body, wheels, and steering links will be drawn here by JS -->
+                </svg>
+            </div>
+            
+            <!-- Controls and Display Panel -->
+            <div class="w-full md:w-1/4 flex-shrink-0 control-panel rounded-2xl shadow-lg p-6 md:p-8 space-y-6">
+                <div class="space-y-4">
+                    <label for="steeringSlider" class="block text-xl font-semibold label-text">Steering Angle</label>
+                    <input type="range" id="steeringSlider" min="0" max="45" value="0" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                    <div class="flex justify-between text-sm text-gray-400">
+                        <span>0°</span>
+                        <span id="steeringValue">0°</span>
+                        <span>45°</span>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <p class="text-xl font-semibold label-text">Steering Mode</p>
+                    <div class="flex flex-col space-y-2">
+                        <label class="inline-flex items-center">
+                            <input type="radio" name="steeringMode" value="ackermann" checked class="form-radio text-red-500 h-5 w-5">
+                            <span class="ml-2 text-md text-gray-300">Perfect Ackermann</span>
+                        </label>
+                        <label class="inline-flex items-center">
+                            <input type="radio" name="steeringMode" value="anti-ackermann" class="form-radio text-red-500 h-5 w-5">
+                            <span class="ml-2 text-md text-gray-300">Anti-Ackermann (F1)</span>
+                        </label>
+                        <label class="inline-flex items-center">
+                            <input type="radio" name="steeringMode" value="parallel" class="form-radio text-red-500 h-5 w-5">
+                            <span class="ml-2 text-md text-gray-300">Parallel Steering</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Display of Calculated Angles -->
+                <div class="bg-gray-700 p-4 rounded-xl space-y-2 shadow-inner">
+                    <p class="text-lg font-bold text-red-400">Inner Wheel Angle: <span id="innerAngle">0.00°</span></p>
+                    <p class="text-lg font-bold text-red-400">Outer Wheel Angle: <span id="outerAngle">0.00°</span></p>
+                </div>
+
+                <!-- Jacobian Display -->
+                <div class="bg-gray-700 p-4 rounded-xl space-y-2 shadow-inner">
+                    <p class="text-lg font-bold text-red-400 text-center">Jacobian Matrix (J)</p>
+                    <div id="jacobianDisplay" class="font-mono text-xl text-gray-200 text-center">
+                        $$
+                        \begin{bmatrix}
+                        \frac{\partial \delta_i}{\partial \theta_s} \\
+                        \frac{\partial \delta_o}{\partial \theta_s}
+                        \end{bmatrix}
+                        $$
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const svg = document.getElementById('carSvg');
+            const steeringSlider = document.getElementById('steeringSlider');
+            const steeringValue = document.getElementById('steeringValue');
+            const innerAngleSpan = document.getElementById('innerAngle');
+            const outerAngleSpan = document.getElementById('outerAngle');
+            const steeringModeRadios = document.querySelectorAll('input[name="steeringMode"]');
+            const jacobianDisplay = document.getElementById('jacobianDisplay');
+
+            // Car geometry parameters
+            const wheelbase = 300; // L
+            const trackWidth = 200; // T
+
+            // SVG dimensions
+            const svgWidth = 800;
+            const svgHeight = 500;
+            const centerX = svgWidth / 2;
+            const baseY = svgHeight - 100;
+
+            // Converts degrees <-> radians
+            function toRadians(degrees) {
+                return degrees * Math.PI / 180;
+            }
+            function toDegrees(radians) {
+                return radians * 180 / Math.PI;
+            }
+
+            // Draws the car visualization on the SVG.
+            function drawCar(leftWheelAngle, rightWheelAngle) {
+                // Clear previous drawings
+                svg.innerHTML = '';
+
+                // --- Draw F1 Car Body ---
+                const chassisPath = document.createElementNS("http://www.w3.org/2000/svg", 'path');
+                const chassisPathData = `
+                    M ${centerX - trackWidth * 0.4} ${baseY - wheelbase} 
+                    L ${centerX - trackWidth * 0.4} ${baseY - 100}
+                    L ${centerX - 20} ${baseY - 50} 
+                    L ${centerX - 20} ${baseY - wheelbase + 50} 
+                    Q ${centerX - 10} ${baseY - wheelbase + 10} ${centerX} ${baseY - wheelbase}
+                    Q ${centerX + 10} ${baseY - wheelbase + 10} ${centerX + 20} ${baseY - wheelbase + 50}
+                    L ${centerX + 20} ${baseY - 50}
+                    L ${centerX + trackWidth * 0.4} ${baseY - 100}
+                    L ${centerX + trackWidth * 0.4} ${baseY - wheelbase}
+                    Z
+                `;
+                chassisPath.setAttribute('d', chassisPathData);
+                chassisPath.setAttribute('class', 'car-body');
+                svg.appendChild(chassisPath);
+
+                // Cockpit
+                const cockpit = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+                cockpit.setAttribute('class', 'car-body');
+                cockpit.setAttribute('x', centerX - 20);
+                cockpit.setAttribute('y', baseY - wheelbase + 100);
+                cockpit.setAttribute('width', 40);
+                cockpit.setAttribute('height', 100);
+                cockpit.setAttribute('rx', '5');
+                cockpit.setAttribute('ry', '5');
+                svg.appendChild(cockpit);
+
+                // Front wing
+                const frontWing = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+                frontWing.setAttribute('class', 'car-body');
+                frontWing.setAttribute('x', centerX - trackWidth / 2 - 30);
+                frontWing.setAttribute('y', baseY - wheelbase - 5);
+                frontWing.setAttribute('width', trackWidth + 60);
+                frontWing.setAttribute('height', 10);
+                svg.appendChild(frontWing);
+
+                // Rear wing
+                const rearWing = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+                rearWing.setAttribute('class', 'car-body');
+                rearWing.setAttribute('x', centerX - trackWidth / 2 - 20);
+                rearWing.setAttribute('y', baseY + 20);
+                rearWing.setAttribute('width', trackWidth + 40);
+                rearWing.setAttribute('height', 10);
+                svg.appendChild(rearWing);
+
+                // Draw wheels
+                drawWheel(centerX - trackWidth / 2, baseY - 50, leftWheelAngle);
+                drawWheel(centerX + trackWidth / 2, baseY - 50, rightWheelAngle);
+                drawWheel(centerX - trackWidth / 2, baseY - wheelbase + 100, 0);
+                drawWheel(centerX + trackWidth / 2, baseY - wheelbase + 100, 0);
+            }
+
+            // Draw a single wheel
+            function drawWheel(x, y, angle) {
+                const wheelWidth = 20;
+                const wheelRadius = 30;
+
+                const wheelGroup = document.createElementNS("http://www.w3.org/2000/svg", 'g');
+                wheelGroup.setAttribute('transform', `translate(${x}, ${y}) rotate(${toDegrees(angle)})`);
+
+                const wheelRect = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+                wheelRect.setAttribute('class', 'wheel');
+                wheelRect.setAttribute('x', -wheelWidth / 2);
+                wheelRect.setAttribute('y', -wheelRadius);
+                wheelRect.setAttribute('width', wheelWidth);
+                wheelRect.setAttribute('height', wheelRadius * 2);
+                wheelRect.setAttribute('rx', '5');
+                wheelRect.setAttribute('ry', '5');
+                wheelGroup.appendChild(wheelRect);
+
+                svg.appendChild(wheelGroup);
+            }
+
+            // Stable derivative helper: dδ/dθ = (sin^2 δ) / (sin^2 θ)
+            function ddelta_dtheta(theta, delta) {
+                const s_theta = Math.sin(theta);
+                const s_delta = Math.sin(delta);
+
+                // Small-angle safe handling
+                if (Math.abs(theta) < 1e-8) {
+                    return 1;
+                }
+                const denom = s_theta * s_theta;
+                if (denom < 1e-14) {
+                    return 1;
+                }
+                return (s_delta * s_delta) / denom;
+            }
+
+            // Calculates and displays the Jacobian matrix values.
+            function displayJacobian(steerAngleRad, innerAngleRad, outerAngleRad, mode) {
+                let J_inner = 1, J_outer = 1;
+
+                switch (mode) {
+                    case 'ackermann': {
+                        // Use stable analytic derivative with the actual δ values
+                        J_inner = ddelta_dtheta(steerAngleRad, innerAngleRad);
+                        J_outer = ddelta_dtheta(steerAngleRad, outerAngleRad);
+                        break;
+                    }
+                    case 'anti-ackermann': {
+                        // Match the mapping: δi from θs−Δ, δo from θs+Δ
+                        const steeringOffsetRad = toRadians(2);
+                        const theta_in = steerAngleRad - steeringOffsetRad;
+                        const theta_out = steerAngleRad + steeringOffsetRad;
+
+                        // Evaluate derivative at the input that produced each δ
+                        J_inner = ddelta_dtheta(theta_in, innerAngleRad);
+                        J_outer = ddelta_dtheta(theta_out, outerAngleRad);
+                        break;
+                    }
+                    case 'parallel':
+                    default: {
+                        // δ = θ, so derivative is exactly 1
+                        J_inner = 1;
+                        J_outer = 1;
+                        break;
+                    }
+                }
+
+                jacobianDisplay.innerHTML = `
+                    $$
+                    J =
+                    \\begin{bmatrix}
+                    \\frac{\\partial \\delta_i}{\\partial \\theta_s} \\\\
+                    \\frac{\\partial \\delta_o}{\\partial \\theta_s}
+                    \\end{bmatrix}
+                    =
+                    \\begin{bmatrix}
+                    ${J_inner.toFixed(3)} \\\\
+                    ${J_outer.toFixed(3)}
+                    \\end{bmatrix}
+                    $$
+                `;
+                // Re-render MathJax
+                if (typeof MathJax !== 'undefined') {
+                    MathJax.typesetPromise([jacobianDisplay]);
+                }
+            }
+
+            // Updates the angles and redraws the car based on the current slider value and mode.
+            function update() {
+                const steerAngleDeg = parseFloat(steeringSlider.value);
+                steeringValue.textContent = `${steerAngleDeg}°`;
+                const steerAngleRad = toRadians(steerAngleDeg);
+                const selectedMode = document.querySelector('input[name="steeringMode"]:checked').value;
+
+                let innerAngleRad, outerAngleRad;
+                let leftWheelAngleRad, rightWheelAngleRad;
+
+                // For steering angles equal to 0, set everything to zero.
+                if (steerAngleDeg === 0) {
+                    innerAngleRad = outerAngleRad = 0;
+                    leftWheelAngleRad = rightWheelAngleRad = 0;
+                } else {
+                    switch (selectedMode) {
+                        case 'ackermann': {
+                            // Perfect Ackermann based on virtual radius R = L/tan θs
+                            outerAngleRad = Math.atan(wheelbase / (wheelbase / Math.tan(steerAngleRad) + trackWidth / 2));
+                            innerAngleRad = Math.atan(wheelbase / (wheelbase / Math.tan(steerAngleRad) - trackWidth / 2));
+                            // Right-hand turn: left wheel = outer, right wheel = inner
+                            leftWheelAngleRad = outerAngleRad;
+                            rightWheelAngleRad = innerAngleRad;
+                            break;
+                        }
+                        case 'anti-ackermann': {
+                            // Offset inputs before Ackermann mapping
+                            const steeringOffsetRad = toRadians(2);
+                            const baseSteerRad = steerAngleRad;
+
+                            const innerSteerInput = baseSteerRad - steeringOffsetRad;
+                            const outerSteerInput = baseSteerRad + steeringOffsetRad;
+
+                            innerAngleRad = Math.atan(wheelbase / (wheelbase / Math.tan(innerSteerInput) - trackWidth / 2));
+                            outerAngleRad = Math.atan(wheelbase / (wheelbase / Math.tan(outerSteerInput) + trackWidth / 2));
+
+                            leftWheelAngleRad = outerAngleRad;
+                            rightWheelAngleRad = innerAngleRad;
+                            break;
+                        }
+                        case 'parallel':
+                        default: {
+                            // Both wheels same angle
+                            innerAngleRad = outerAngleRad = steerAngleRad;
+                            leftWheelAngleRad = rightWheelAngleRad = steerAngleRad;
+                            break;
+                        }
+                    }
+                }
+
+                innerAngleSpan.textContent = `${toDegrees(innerAngleRad).toFixed(2)}°`;
+                outerAngleSpan.textContent = `${toDegrees(outerAngleRad).toFixed(2)}°`;
+
+                drawCar(leftWheelAngleRad, rightWheelAngleRad);
+                displayJacobian(steerAngleRad, innerAngleRad, outerAngleRad, selectedMode);
+            }
+
+            // Event listeners
+            steeringSlider.addEventListener('input', update);
+            steeringModeRadios.forEach(radio => radio.addEventListener('change', update));
+            
+            // Initial draw
+            update();
+        });
+    </script>
+</body>
+</html>
